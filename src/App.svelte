@@ -1,9 +1,9 @@
 <script>
-	let bg = document.getElementById("bg");
-	let moon = document.getElementById("moon");
-	let mountain = document.getElementById("mountain");
-	let road = document.getElementById("road");
-	let text = document.getElementById("text");
+	let bg;
+	let moon;
+	let mountain;
+	let road;
+	let text;
 
 	window.addEventListener('scroll', function(){
 		var value = window.scrollY;
@@ -12,23 +12,25 @@
 		moon.style.left = -value * 0.5 + 'px';
 		mountain.style.top = -value * 0.15 + 'px';
 		road.style.top = value * 0.15 + 'px';
+		text.style.top = value * 1 + 'px';
+
 	})
 </script>
 
-<main class="font-main">
+<main>
 	<section>
-		<img src="images/bg.jpg" id="bg" alt = "bg">
-		<img src="images/moon.png" id="moon" alt = "bg">
-		<img src="images/mountain.png" id="mountain" alt = "bg">
-		<img src="images/road.png" id="road" alt = "bg">
-		<h2 id="text">Moon Light</h2>
+		<img bind:this={bg} src="images/bg.jpg" id="bg" alt = "bg">
+		<img bind:this={moon} src="images/moon.png" id="moon" alt = "bg">
+		<img bind:this={mountain} src="images/mountain.png" id="mountain" alt = "bg">
+		<img bind:this={road} src="images/road.png" id="road" alt = "bg">
+		<h2 bind:this={text} id="text">Moon Light</h2>
 	</section>
 </main>
 
 
 
 <style lang="postcss" global>
-	@import url('https//fonts.googleapis.com/css?family=Poppins:300,400,500,600,700,800,900&display=swap');
+	@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600&display=swap');
 	@tailwind base;
 	@tailwind components;
 	@tailwind utilities;
@@ -93,5 +95,9 @@
 		color: #fff;
 		font-size: 10em;
 		z-index: 1;
+	}
+
+	#road {
+		z-index: 2;
 	}
 </style>

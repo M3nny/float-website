@@ -374,24 +374,23 @@ var app = (function () {
     			if (!src_url_equal(img0.src, img0_src_value = "images/bg.jpg")) attr_dev(img0, "src", img0_src_value);
     			attr_dev(img0, "id", "bg");
     			attr_dev(img0, "alt", "bg");
-    			add_location(img0, file, 19, 2, 533);
+    			add_location(img0, file, 21, 2, 381);
     			if (!src_url_equal(img1.src, img1_src_value = "images/moon.png")) attr_dev(img1, "src", img1_src_value);
     			attr_dev(img1, "id", "moon");
     			attr_dev(img1, "alt", "bg");
-    			add_location(img1, file, 20, 2, 580);
+    			add_location(img1, file, 22, 2, 443);
     			if (!src_url_equal(img2.src, img2_src_value = "images/mountain.png")) attr_dev(img2, "src", img2_src_value);
     			attr_dev(img2, "id", "mountain");
     			attr_dev(img2, "alt", "bg");
-    			add_location(img2, file, 21, 2, 631);
+    			add_location(img2, file, 23, 2, 511);
     			if (!src_url_equal(img3.src, img3_src_value = "images/road.png")) attr_dev(img3, "src", img3_src_value);
     			attr_dev(img3, "id", "road");
     			attr_dev(img3, "alt", "bg");
-    			add_location(img3, file, 22, 2, 690);
+    			add_location(img3, file, 24, 2, 591);
     			attr_dev(h2, "id", "text");
-    			add_location(h2, file, 23, 2, 741);
-    			add_location(section, file, 18, 1, 521);
-    			attr_dev(main, "class", "font-main");
-    			add_location(main, file, 17, 0, 495);
+    			add_location(h2, file, 25, 2, 659);
+    			add_location(section, file, 20, 1, 369);
+    			add_location(main, file, 19, 0, 361);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -400,20 +399,30 @@ var app = (function () {
     			insert_dev(target, main, anchor);
     			append_dev(main, section);
     			append_dev(section, img0);
+    			/*img0_binding*/ ctx[5](img0);
     			append_dev(section, t0);
     			append_dev(section, img1);
+    			/*img1_binding*/ ctx[6](img1);
     			append_dev(section, t1);
     			append_dev(section, img2);
+    			/*img2_binding*/ ctx[7](img2);
     			append_dev(section, t2);
     			append_dev(section, img3);
+    			/*img3_binding*/ ctx[8](img3);
     			append_dev(section, t3);
     			append_dev(section, h2);
+    			/*h2_binding*/ ctx[9](h2);
     		},
     		p: noop,
     		i: noop,
     		o: noop,
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(main);
+    			/*img0_binding*/ ctx[5](null);
+    			/*img1_binding*/ ctx[6](null);
+    			/*img2_binding*/ ctx[7](null);
+    			/*img3_binding*/ ctx[8](null);
+    			/*h2_binding*/ ctx[9](null);
     		}
     	};
 
@@ -431,18 +440,19 @@ var app = (function () {
     function instance($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('App', slots, []);
-    	let bg = document.getElementById("bg");
-    	let moon = document.getElementById("moon");
-    	let mountain = document.getElementById("mountain");
-    	let road = document.getElementById("road");
-    	let text = document.getElementById("text");
+    	let bg;
+    	let moon;
+    	let mountain;
+    	let road;
+    	let text;
 
     	window.addEventListener('scroll', function () {
     		var value = window.scrollY;
-    		bg.style.top = value * 0.5 + 'px';
-    		moon.style.left = -value * 0.5 + 'px';
-    		mountain.style.top = -value * 0.15 + 'px';
-    		road.style.top = value * 0.15 + 'px';
+    		$$invalidate(0, bg.style.top = value * 0.5 + 'px', bg);
+    		$$invalidate(1, moon.style.left = -value * 0.5 + 'px', moon);
+    		$$invalidate(2, mountain.style.top = -value * 0.15 + 'px', mountain);
+    		$$invalidate(3, road.style.top = value * 0.15 + 'px', road);
+    		$$invalidate(4, text.style.top = value * 1 + 'px', text);
     	});
 
     	const writable_props = [];
@@ -451,21 +461,67 @@ var app = (function () {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<App> was created with unknown prop '${key}'`);
     	});
 
+    	function img0_binding($$value) {
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			bg = $$value;
+    			$$invalidate(0, bg);
+    		});
+    	}
+
+    	function img1_binding($$value) {
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			moon = $$value;
+    			$$invalidate(1, moon);
+    		});
+    	}
+
+    	function img2_binding($$value) {
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			mountain = $$value;
+    			$$invalidate(2, mountain);
+    		});
+    	}
+
+    	function img3_binding($$value) {
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			road = $$value;
+    			$$invalidate(3, road);
+    		});
+    	}
+
+    	function h2_binding($$value) {
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			text = $$value;
+    			$$invalidate(4, text);
+    		});
+    	}
+
     	$$self.$capture_state = () => ({ bg, moon, mountain, road, text });
 
     	$$self.$inject_state = $$props => {
-    		if ('bg' in $$props) bg = $$props.bg;
-    		if ('moon' in $$props) moon = $$props.moon;
-    		if ('mountain' in $$props) mountain = $$props.mountain;
-    		if ('road' in $$props) road = $$props.road;
-    		if ('text' in $$props) text = $$props.text;
+    		if ('bg' in $$props) $$invalidate(0, bg = $$props.bg);
+    		if ('moon' in $$props) $$invalidate(1, moon = $$props.moon);
+    		if ('mountain' in $$props) $$invalidate(2, mountain = $$props.mountain);
+    		if ('road' in $$props) $$invalidate(3, road = $$props.road);
+    		if ('text' in $$props) $$invalidate(4, text = $$props.text);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [];
+    	return [
+    		bg,
+    		moon,
+    		mountain,
+    		road,
+    		text,
+    		img0_binding,
+    		img1_binding,
+    		img2_binding,
+    		img3_binding,
+    		h2_binding
+    	];
     }
 
     class App extends SvelteComponentDev {

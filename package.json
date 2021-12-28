@@ -19,6 +19,7 @@
     "rollup-plugin-terser": "^7.0.0",
     "svelte": "^3.0.0",
     "svelte-preprocess": "^4.10.1",
+    "svelte-typewriter": "^3.0.0-alpha.5",
     "tailwindcss": "^3.0.7"
   },
   "dependencies": {

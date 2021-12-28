@@ -1,17 +1,16 @@
 <script>
-	let bg;
-	let moon;
-	let mountain;
-	let road;
+	import Typewriter from 'svelte-typewriter';
+	let background;
+	let floating_island;
+	let grass;
 	let text;
 
 	window.addEventListener('scroll', function(){
 		var value = window.scrollY;
 
-		bg.style.top = value * 0.5 + 'px';
-		moon.style.left = -value * 0.5 + 'px';
-		mountain.style.top = -value * 0.15 + 'px';
-		road.style.top = value * 0.15 + 'px';
+		background.style.top = value * 0.5 + 'px';
+		floating_island.style.left = -value * 0.5 + 'px';
+		grass.style.top = value * 0.15 + 'px';
 		text.style.top = value * 1 + 'px';
 
 	})
@@ -19,12 +18,17 @@
 
 <main>
 	<section>
-		<img bind:this={bg} src="images/bg.jpg" id="bg" alt = "bg">
-		<img bind:this={moon} src="images/moon.png" id="moon" alt = "bg">
-		<img bind:this={mountain} src="images/mountain.png" id="mountain" alt = "bg">
-		<img bind:this={road} src="images/road.png" id="road" alt = "bg">
-		<h2 bind:this={text} id="text">Moon Light</h2>
+		<img bind:this={background} src="images/background.png" id="bg" alt = "background">
+		<img bind:this={floating_island} src="images/floating_island.png" id="floating_island" alt = "floating_island">
+		<img bind:this={grass} src="images/grass.png" id="grass" alt = "grass">
+
+		<Typewriter interval={200}>
+			<h2 bind:this={text} id="text">Welcome</h2>
+		</Typewriter>
 	</section>
+
+
+	
 </main>
 
 
@@ -43,7 +47,7 @@
 	}
 
 	main {
-		background: #0a2a43;
+		background: #ff7d57;
 		min-height: 1500px;
 	}
 
@@ -62,8 +66,8 @@
 		position: absolute;
 		bottom: 0;
 		width: 100%;
-		height: 100px;
-		background: linear-gradient(to top, #0a2a43, transparent);
+		height: 50px;
+		background: linear-gradient(to top, #ff7d57, transparent);
 		z-index: 10000;
 	}
 
@@ -74,7 +78,6 @@
 		left: 0;
 		width: 100%;
 		height: 100%;
-		background: #0a2a43;
 		z-index: 10000;
 		mix-blend-mode: color;
 
@@ -97,7 +100,7 @@
 		z-index: 1;
 	}
 
-	#road {
+	#grass {
 		z-index: 2;
 	}
 </style>

@@ -4,6 +4,12 @@ var app = (function () {
     'use strict';
 
     function noop() { }
+    function assign(tar, src) {
+        // @ts-ignore
+        for (const k in src)
+            tar[k] = src[k];
+        return tar;
+    }
     function add_location(element, file, line, column, char) {
         element.__svelte_meta = {
             loc: { file, line, column, char }
@@ -35,6 +41,55 @@ var app = (function () {
     function is_empty(obj) {
         return Object.keys(obj).length === 0;
     }
+    function create_slot(definition, ctx, $$scope, fn) {
+        if (definition) {
+            const slot_ctx = get_slot_context(definition, ctx, $$scope, fn);
+            return definition[0](slot_ctx);
+        }
+    }
+    function get_slot_context(definition, ctx, $$scope, fn) {
+        return definition[1] && fn
+            ? assign($$scope.ctx.slice(), definition[1](fn(ctx)))
+            : $$scope.ctx;
+    }
+    function get_slot_changes(definition, $$scope, dirty, fn) {
+        if (definition[2] && fn) {
+            const lets = definition[2](fn(dirty));
+            if ($$scope.dirty === undefined) {
+                return lets;
+            }
+            if (typeof lets === 'object') {
+                const merged = [];
+                const len = Math.max($$scope.dirty.length, lets.length);
+                for (let i = 0; i < len; i += 1) {
+                    merged[i] = $$scope.dirty[i] | lets[i];
+                }
+                return merged;
+            }
+            return $$scope.dirty | lets;
+        }
+        return $$scope.dirty;
+    }
+    function update_slot_base(slot, slot_definition, ctx, $$scope, slot_changes, get_slot_context_fn) {
+        if (slot_changes) {
+            const slot_context = get_slot_context(slot_definition, ctx, $$scope, get_slot_context_fn);
+            slot.p(slot_context, slot_changes);
+        }
+    }
+    function get_all_dirty_from_scope($$scope) {
+        if ($$scope.ctx.length > 32) {
+            const dirty = [];
+            const length = $$scope.ctx.length / 32;
+            for (let i = 0; i < length; i++) {
+                dirty[i] = -1;
+            }
+            return dirty;
+        }
+        return -1;
+    }
+    function action_destroyer(action_result) {
+        return action_result && is_function(action_result.destroy) ? action_result.destroy : noop;
+    }
     function append(target, node) {
         target.appendChild(node);
     }
@@ -62,6 +117,12 @@ var app = (function () {
     function children(element) {
         return Array.from(element.childNodes);
     }
+    function set_style(node, key, value, important) {
+        node.style.setProperty(key, value, important ? 'important' : '');
+    }
+    function toggle_class(element, name, toggle) {
+        element.classList[toggle ? 'add' : 'remove'](name);
+    }
     function custom_event(type, detail, bubbles = false) {
         const e = document.createEvent('CustomEvent');
         e.initCustomEvent(type, bubbles, false, detail);
@@ -71,6 +132,25 @@ var app = (function () {
     let current_component;
     function set_current_component(component) {
         current_component = component;
+    }
+    function get_current_component() {
+        if (!current_component)
+            throw new Error('Function called outside component initialization');
+        return current_component;
+    }
+    function createEventDispatcher() {
+        const component = get_current_component();
+        return (type, detail) => {
+            const callbacks = component.$$.callbacks[type];
+            if (callbacks) {
+                // TODO are there situations where events could be dispatched
+                // in a server (non-DOM) environment?
+                const event = custom_event(type, detail);
+                callbacks.slice().forEach(fn => {
+                    fn.call(component, event);
+                });
+            }
+        };
     }
 
     const dirty_components = [];
@@ -155,11 +235,31 @@ var app = (function () {
         }
     }
     const outroing = new Set();
+    let outros;
     function transition_in(block, local) {
         if (block && block.i) {
             outroing.delete(block);
             block.i(local);
         }
+    }
+    function transition_out(block, local, detach, callback) {
+        if (block && block.o) {
+            if (outroing.has(block))
+                return;
+            outroing.add(block);
+            outros.c.push(() => {
+                outroing.delete(block);
+                if (callback) {
+                    if (detach)
+                        block.d(1);
+                    callback();
+                }
+            });
+            block.o(local);
+        }
+    }
+    function create_component(block) {
+        block && block.c();
     }
     function mount_component(component, target, anchor, customElement) {
         const { fragment, on_mount, on_destroy, after_update } = component.$$;
@@ -336,9 +436,416 @@ var app = (function () {
         $inject_state() { }
     }
 
-    /* src/App.svelte generated by Svelte v3.44.3 */
+    /** @type {import(types').HasSingleTextNode} */
+    const hasSingleTextNode = el => el.childNodes.length === 1 && el.childNodes[0].nodeType === 3;
 
+    /** @type {import(types').CreateElement} */
+    const createElement = (text, elementTag) => {
+    	const element = document.createElement(elementTag);
+    	element.textContent = text;
+    	return element
+    };
+
+    const filterOutStaticElements = child => child.dataset.static === undefined;
+
+    /** @type {import(types').GetElements} */
+    const getElements = (node, { parentElement }) => {
+    	if (hasSingleTextNode(parentElement)) {
+    		const text = parentElement.textContent;
+    		const childNode = createElement(parentElement.textContent, 'p');
+    		parentElement.textContent = '';
+    		parentElement.appendChild(childNode);
+    		return [{ currentNode: childNode, text }]
+    	}
+
+    	if (hasSingleTextNode(node)) {
+    		const textWithFilteredAmpersand = node.innerHTML.replaceAll('&amp;', '&');
+    		return [{ currentNode: node, text: textWithFilteredAmpersand }]
+    	} else {
+    		const children = [...node.children].filter(filterOutStaticElements);
+    		const allChildren = children.flatMap(child => getElements(child, { parentElement }));
+    		return allChildren
+    	}
+    };
+
+    const runOnEveryParentUntil = async (element, parent, callback) => {
+    	if (!parent) {
+    		console.error('The specified parent element does not exists!');
+    		return
+    	}
+
+    	let currentElement = element;
+    	do {
+    		if (currentElement === parent) return
+
+    		callback(currentElement);
+
+    		currentElement = currentElement.parentElement || currentElement.parentNode;
+    	} while (currentElement !== null && currentElement.nodeType === 1)
+    };
+
+    const makeNestedStaticElementsVisible = parentElement => {
+    	const staticElements = [...parentElement.querySelectorAll('[data-static]')];
+    	for (const staticElement of staticElements) {
+    		runOnEveryParentUntil(staticElement, parentElement, currentStaticElement => {
+    			const isParentElement = currentStaticElement !== staticElement;
+    			isParentElement && currentStaticElement.classList.add('finished-typing');
+    		});
+    	}
+    };
+
+    const getSelectedMode = async options => {
+    	if (options.loop || options.loopRandom) {
+    		return (await Promise.resolve().then(function () { return loopTypewriter$1; })).mode
+    	} else if (options.scramble) {
+    		return (await Promise.resolve().then(function () { return scramble; })).mode
+    	} else {
+    		return (await Promise.resolve().then(function () { return typewriter; })).mode
+    	}
+    };
+
+    /** @type {import('types').TypewriterMainFn} */
+    const typewriter$1 = async (node, options) => {
+    	makeNestedStaticElementsVisible(node);
+    	const mode = await getSelectedMode(options);
+    	const elements = getElements(node, { parentElement: node, ...options });
+    	if (options.delay > 0) {
+    		const { sleep } = await Promise.resolve().then(function () { return sleep$1; });
+    		await sleep(options.delay);
+    		node.classList.remove('delay');
+    	}
+    	mode(elements, { parentElement: node, ...options });
+    };
+
+    /* node_modules/svelte-typewriter/src/Typewriter.svelte generated by Svelte v3.44.3 */
+    const file$1 = "node_modules/svelte-typewriter/src/Typewriter.svelte";
+
+    function create_fragment$1(ctx) {
+    	let div;
+    	let typewriter_action;
+    	let current;
+    	let mounted;
+    	let dispose;
+    	const default_slot_template = /*#slots*/ ctx[10].default;
+    	const default_slot = create_slot(default_slot_template, ctx, /*$$scope*/ ctx[9], null);
+
+    	const block = {
+    		c: function create() {
+    			div = element("div");
+    			if (default_slot) default_slot.c();
+    			attr_dev(div, "class", "typewriter-container svelte-cjgu4b");
+
+    			set_style(div, "--cursor-color", typeof /*cursor*/ ctx[0] === 'string'
+    			? /*cursor*/ ctx[0]
+    			: 'black');
+
+    			toggle_class(div, "cursor", /*cursor*/ ctx[0]);
+    			toggle_class(div, "delay", /*options*/ ctx[1].delay > 0);
+    			add_location(div, file$1, 62, 0, 1150);
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, div, anchor);
+
+    			if (default_slot) {
+    				default_slot.m(div, null);
+    			}
+
+    			current = true;
+
+    			if (!mounted) {
+    				dispose = action_destroyer(typewriter_action = typewriter$1.call(null, div, /*options*/ ctx[1]));
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, [dirty]) {
+    			if (default_slot) {
+    				if (default_slot.p && (!current || dirty & /*$$scope*/ 512)) {
+    					update_slot_base(
+    						default_slot,
+    						default_slot_template,
+    						ctx,
+    						/*$$scope*/ ctx[9],
+    						!current
+    						? get_all_dirty_from_scope(/*$$scope*/ ctx[9])
+    						: get_slot_changes(default_slot_template, /*$$scope*/ ctx[9], dirty, null),
+    						null
+    					);
+    				}
+    			}
+
+    			if (!current || dirty & /*cursor*/ 1) {
+    				set_style(div, "--cursor-color", typeof /*cursor*/ ctx[0] === 'string'
+    				? /*cursor*/ ctx[0]
+    				: 'black');
+    			}
+
+    			if (typewriter_action && is_function(typewriter_action.update) && dirty & /*options*/ 2) typewriter_action.update.call(null, /*options*/ ctx[1]);
+
+    			if (dirty & /*cursor*/ 1) {
+    				toggle_class(div, "cursor", /*cursor*/ ctx[0]);
+    			}
+
+    			if (dirty & /*options*/ 2) {
+    				toggle_class(div, "delay", /*options*/ ctx[1].delay > 0);
+    			}
+    		},
+    		i: function intro(local) {
+    			if (current) return;
+    			transition_in(default_slot, local);
+    			current = true;
+    		},
+    		o: function outro(local) {
+    			transition_out(default_slot, local);
+    			current = false;
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(div);
+    			if (default_slot) default_slot.d(detaching);
+    			mounted = false;
+    			dispose();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$1.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$1($$self, $$props, $$invalidate) {
+    	let options;
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Typewriter', slots, ['default']);
+    	let { interval = 30 } = $$props;
+    	let { cascade = false } = $$props;
+    	let { loop = false } = $$props;
+    	let { loopRandom = false } = $$props;
+    	let { scramble = false } = $$props;
+    	let { scrambleSlowdown = scramble ? true : false } = $$props;
+    	let { cursor = true } = $$props;
+    	let { delay = 0 } = $$props;
+    	const dispatch = createEventDispatcher();
+
+    	const writable_props = [
+    		'interval',
+    		'cascade',
+    		'loop',
+    		'loopRandom',
+    		'scramble',
+    		'scrambleSlowdown',
+    		'cursor',
+    		'delay'
+    	];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Typewriter> was created with unknown prop '${key}'`);
+    	});
+
+    	$$self.$$set = $$props => {
+    		if ('interval' in $$props) $$invalidate(2, interval = $$props.interval);
+    		if ('cascade' in $$props) $$invalidate(3, cascade = $$props.cascade);
+    		if ('loop' in $$props) $$invalidate(4, loop = $$props.loop);
+    		if ('loopRandom' in $$props) $$invalidate(5, loopRandom = $$props.loopRandom);
+    		if ('scramble' in $$props) $$invalidate(6, scramble = $$props.scramble);
+    		if ('scrambleSlowdown' in $$props) $$invalidate(7, scrambleSlowdown = $$props.scrambleSlowdown);
+    		if ('cursor' in $$props) $$invalidate(0, cursor = $$props.cursor);
+    		if ('delay' in $$props) $$invalidate(8, delay = $$props.delay);
+    		if ('$$scope' in $$props) $$invalidate(9, $$scope = $$props.$$scope);
+    	};
+
+    	$$self.$capture_state = () => ({
+    		createEventDispatcher,
+    		typewriter: typewriter$1,
+    		interval,
+    		cascade,
+    		loop,
+    		loopRandom,
+    		scramble,
+    		scrambleSlowdown,
+    		cursor,
+    		delay,
+    		dispatch,
+    		options
+    	});
+
+    	$$self.$inject_state = $$props => {
+    		if ('interval' in $$props) $$invalidate(2, interval = $$props.interval);
+    		if ('cascade' in $$props) $$invalidate(3, cascade = $$props.cascade);
+    		if ('loop' in $$props) $$invalidate(4, loop = $$props.loop);
+    		if ('loopRandom' in $$props) $$invalidate(5, loopRandom = $$props.loopRandom);
+    		if ('scramble' in $$props) $$invalidate(6, scramble = $$props.scramble);
+    		if ('scrambleSlowdown' in $$props) $$invalidate(7, scrambleSlowdown = $$props.scrambleSlowdown);
+    		if ('cursor' in $$props) $$invalidate(0, cursor = $$props.cursor);
+    		if ('delay' in $$props) $$invalidate(8, delay = $$props.delay);
+    		if ('options' in $$props) $$invalidate(1, options = $$props.options);
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	$$self.$$.update = () => {
+    		if ($$self.$$.dirty & /*interval, cascade, loop, loopRandom, scramble, scrambleSlowdown, cursor, delay*/ 509) {
+    			$$invalidate(1, options = {
+    				interval,
+    				cascade,
+    				loop,
+    				loopRandom,
+    				scramble,
+    				scrambleSlowdown,
+    				cursor,
+    				delay,
+    				dispatch
+    			});
+    		}
+    	};
+
+    	return [
+    		cursor,
+    		options,
+    		interval,
+    		cascade,
+    		loop,
+    		loopRandom,
+    		scramble,
+    		scrambleSlowdown,
+    		delay,
+    		$$scope,
+    		slots
+    	];
+    }
+
+    class Typewriter extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+
+    		init(this, options, instance$1, create_fragment$1, safe_not_equal, {
+    			interval: 2,
+    			cascade: 3,
+    			loop: 4,
+    			loopRandom: 5,
+    			scramble: 6,
+    			scrambleSlowdown: 7,
+    			cursor: 0,
+    			delay: 8
+    		});
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "Typewriter",
+    			options,
+    			id: create_fragment$1.name
+    		});
+    	}
+
+    	get interval() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set interval(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get cascade() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set cascade(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get loop() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set loop(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get loopRandom() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set loopRandom(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get scramble() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set scramble(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get scrambleSlowdown() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set scrambleSlowdown(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get cursor() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set cursor(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get delay() {
+    		throw new Error("<Typewriter>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set delay(value) {
+    		throw new Error("<Typewriter>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+    }
+
+    /* src/App.svelte generated by Svelte v3.44.3 */
     const file = "src/App.svelte";
+
+    // (25:2) <Typewriter interval={200}>
+    function create_default_slot(ctx) {
+    	let h2;
+
+    	const block = {
+    		c: function create() {
+    			h2 = element("h2");
+    			h2.textContent = "Welcome";
+    			attr_dev(h2, "id", "text");
+    			add_location(h2, file, 25, 3, 712);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, h2, anchor);
+    			/*h2_binding*/ ctx[7](h2);
+    		},
+    		p: noop,
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(h2);
+    			/*h2_binding*/ ctx[7](null);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_default_slot.name,
+    		type: "slot",
+    		source: "(25:2) <Typewriter interval={200}>",
+    		ctx
+    	});
+
+    	return block;
+    }
 
     function create_fragment(ctx) {
     	let main;
@@ -352,10 +859,17 @@ var app = (function () {
     	let img2;
     	let img2_src_value;
     	let t2;
-    	let img3;
-    	let img3_src_value;
-    	let t3;
-    	let h2;
+    	let typewriter;
+    	let current;
+
+    	typewriter = new Typewriter({
+    			props: {
+    				interval: 200,
+    				$$slots: { default: [create_default_slot] },
+    				$$scope: { ctx }
+    			},
+    			$$inline: true
+    		});
 
     	const block = {
     		c: function create() {
@@ -367,30 +881,21 @@ var app = (function () {
     			t1 = space();
     			img2 = element("img");
     			t2 = space();
-    			img3 = element("img");
-    			t3 = space();
-    			h2 = element("h2");
-    			h2.textContent = "Moon Light";
-    			if (!src_url_equal(img0.src, img0_src_value = "images/bg.jpg")) attr_dev(img0, "src", img0_src_value);
+    			create_component(typewriter.$$.fragment);
+    			if (!src_url_equal(img0.src, img0_src_value = "images/background.png")) attr_dev(img0, "src", img0_src_value);
     			attr_dev(img0, "id", "bg");
-    			attr_dev(img0, "alt", "bg");
-    			add_location(img0, file, 21, 2, 381);
-    			if (!src_url_equal(img1.src, img1_src_value = "images/moon.png")) attr_dev(img1, "src", img1_src_value);
-    			attr_dev(img1, "id", "moon");
-    			attr_dev(img1, "alt", "bg");
-    			add_location(img1, file, 22, 2, 443);
-    			if (!src_url_equal(img2.src, img2_src_value = "images/mountain.png")) attr_dev(img2, "src", img2_src_value);
-    			attr_dev(img2, "id", "mountain");
-    			attr_dev(img2, "alt", "bg");
-    			add_location(img2, file, 23, 2, 511);
-    			if (!src_url_equal(img3.src, img3_src_value = "images/road.png")) attr_dev(img3, "src", img3_src_value);
-    			attr_dev(img3, "id", "road");
-    			attr_dev(img3, "alt", "bg");
-    			add_location(img3, file, 24, 2, 591);
-    			attr_dev(h2, "id", "text");
-    			add_location(h2, file, 25, 2, 659);
-    			add_location(section, file, 20, 1, 369);
-    			add_location(main, file, 19, 0, 361);
+    			attr_dev(img0, "alt", "background");
+    			add_location(img0, file, 20, 2, 406);
+    			if (!src_url_equal(img1.src, img1_src_value = "images/floating_island.png")) attr_dev(img1, "src", img1_src_value);
+    			attr_dev(img1, "id", "floating_island");
+    			attr_dev(img1, "alt", "floating_island");
+    			add_location(img1, file, 21, 2, 492);
+    			if (!src_url_equal(img2.src, img2_src_value = "images/grass.png")) attr_dev(img2, "src", img2_src_value);
+    			attr_dev(img2, "id", "grass");
+    			attr_dev(img2, "alt", "grass");
+    			add_location(img2, file, 22, 2, 606);
+    			add_location(section, file, 19, 1, 394);
+    			add_location(main, file, 18, 0, 386);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -399,30 +904,41 @@ var app = (function () {
     			insert_dev(target, main, anchor);
     			append_dev(main, section);
     			append_dev(section, img0);
-    			/*img0_binding*/ ctx[5](img0);
+    			/*img0_binding*/ ctx[4](img0);
     			append_dev(section, t0);
     			append_dev(section, img1);
-    			/*img1_binding*/ ctx[6](img1);
+    			/*img1_binding*/ ctx[5](img1);
     			append_dev(section, t1);
     			append_dev(section, img2);
-    			/*img2_binding*/ ctx[7](img2);
+    			/*img2_binding*/ ctx[6](img2);
     			append_dev(section, t2);
-    			append_dev(section, img3);
-    			/*img3_binding*/ ctx[8](img3);
-    			append_dev(section, t3);
-    			append_dev(section, h2);
-    			/*h2_binding*/ ctx[9](h2);
+    			mount_component(typewriter, section, null);
+    			current = true;
     		},
-    		p: noop,
-    		i: noop,
-    		o: noop,
+    		p: function update(ctx, [dirty]) {
+    			const typewriter_changes = {};
+
+    			if (dirty & /*$$scope, text*/ 264) {
+    				typewriter_changes.$$scope = { dirty, ctx };
+    			}
+
+    			typewriter.$set(typewriter_changes);
+    		},
+    		i: function intro(local) {
+    			if (current) return;
+    			transition_in(typewriter.$$.fragment, local);
+    			current = true;
+    		},
+    		o: function outro(local) {
+    			transition_out(typewriter.$$.fragment, local);
+    			current = false;
+    		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(main);
-    			/*img0_binding*/ ctx[5](null);
-    			/*img1_binding*/ ctx[6](null);
-    			/*img2_binding*/ ctx[7](null);
-    			/*img3_binding*/ ctx[8](null);
-    			/*h2_binding*/ ctx[9](null);
+    			/*img0_binding*/ ctx[4](null);
+    			/*img1_binding*/ ctx[5](null);
+    			/*img2_binding*/ ctx[6](null);
+    			destroy_component(typewriter);
     		}
     	};
 
@@ -440,19 +956,17 @@ var app = (function () {
     function instance($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('App', slots, []);
-    	let bg;
-    	let moon;
-    	let mountain;
-    	let road;
+    	let background;
+    	let floating_island;
+    	let grass;
     	let text;
 
     	window.addEventListener('scroll', function () {
     		var value = window.scrollY;
-    		$$invalidate(0, bg.style.top = value * 0.5 + 'px', bg);
-    		$$invalidate(1, moon.style.left = -value * 0.5 + 'px', moon);
-    		$$invalidate(2, mountain.style.top = -value * 0.15 + 'px', mountain);
-    		$$invalidate(3, road.style.top = value * 0.15 + 'px', road);
-    		$$invalidate(4, text.style.top = value * 1 + 'px', text);
+    		$$invalidate(0, background.style.top = value * 0.5 + 'px', background);
+    		$$invalidate(1, floating_island.style.left = -value * 0.5 + 'px', floating_island);
+    		$$invalidate(2, grass.style.top = value * 0.15 + 'px', grass);
+    		$$invalidate(3, text.style.top = value * 1 + 'px', text);
     	});
 
     	const writable_props = [];
@@ -463,47 +977,45 @@ var app = (function () {
 
     	function img0_binding($$value) {
     		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
-    			bg = $$value;
-    			$$invalidate(0, bg);
+    			background = $$value;
+    			$$invalidate(0, background);
     		});
     	}
 
     	function img1_binding($$value) {
     		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
-    			moon = $$value;
-    			$$invalidate(1, moon);
+    			floating_island = $$value;
+    			$$invalidate(1, floating_island);
     		});
     	}
 
     	function img2_binding($$value) {
     		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
-    			mountain = $$value;
-    			$$invalidate(2, mountain);
-    		});
-    	}
-
-    	function img3_binding($$value) {
-    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
-    			road = $$value;
-    			$$invalidate(3, road);
+    			grass = $$value;
+    			$$invalidate(2, grass);
     		});
     	}
 
     	function h2_binding($$value) {
     		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
     			text = $$value;
-    			$$invalidate(4, text);
+    			$$invalidate(3, text);
     		});
     	}
 
-    	$$self.$capture_state = () => ({ bg, moon, mountain, road, text });
+    	$$self.$capture_state = () => ({
+    		Typewriter,
+    		background,
+    		floating_island,
+    		grass,
+    		text
+    	});
 
     	$$self.$inject_state = $$props => {
-    		if ('bg' in $$props) $$invalidate(0, bg = $$props.bg);
-    		if ('moon' in $$props) $$invalidate(1, moon = $$props.moon);
-    		if ('mountain' in $$props) $$invalidate(2, mountain = $$props.mountain);
-    		if ('road' in $$props) $$invalidate(3, road = $$props.road);
-    		if ('text' in $$props) $$invalidate(4, text = $$props.text);
+    		if ('background' in $$props) $$invalidate(0, background = $$props.background);
+    		if ('floating_island' in $$props) $$invalidate(1, floating_island = $$props.floating_island);
+    		if ('grass' in $$props) $$invalidate(2, grass = $$props.grass);
+    		if ('text' in $$props) $$invalidate(3, text = $$props.text);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -511,15 +1023,13 @@ var app = (function () {
     	}
 
     	return [
-    		bg,
-    		moon,
-    		mountain,
-    		road,
+    		background,
+    		floating_island,
+    		grass,
     		text,
     		img0_binding,
     		img1_binding,
     		img2_binding,
-    		img3_binding,
     		h2_binding
     	];
     }
@@ -540,6 +1050,248 @@ var app = (function () {
 
     const app = new App({
     	target: document.body,
+    });
+
+    /** @type {import(types').Sleep} */
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    var sleep$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        sleep: sleep
+    });
+
+    /** @type {import(types').RandomNumberGenerator} */
+    const rng = (min, max) => Math.floor(Math.random() * (max - min) + min);
+
+    /** @type {import(types').TypingInterval} */
+    const typingInterval = async interval =>
+    	sleep(Array.isArray(interval) ? interval[rng(0, interval.length)] : interval);
+
+    /** @type {import(types').TypewriterEffectFn} */
+    const writeEffect = async ({ currentNode, text }, options) => {
+    	runOnEveryParentUntil(currentNode, options.parentElement, element => {
+    		const classToAdd = currentNode === element ? 'typing' : 'finished-typing';
+    		element.classList.add(classToAdd);
+    	});
+    	for (let index = 0; index <= text.length; index++) {
+    		const char = text[index];
+    		char === '<' && (index = text.indexOf('>', index));
+    		currentNode.innerHTML = text.slice(0, index);
+    		await typingInterval(options.interval);
+    	}
+    };
+
+    /** @type {import(types').UnwriteEffect} */
+    const unwriteEffect = async (currentNode, options) => {
+    	options.dispatch('done');
+    	await typingInterval(typeof options.loop === 'number' ? options.loop : 1500);
+    	const text = currentNode.innerHTML.replaceAll('&amp;', '&');
+    	for (let index = text.length - 1; index >= 0; index--) {
+    		const letter = text[index];
+    		letter === '>' && (index = text.lastIndexOf('<', index));
+    		currentNode.innerHTML = text.slice(0, index);
+    		await typingInterval(options.interval);
+    	}
+    };
+
+    /** @type {any[]} */
+    let alreadyChoosenTexts = [];
+
+    /** @type {import(types').GetRandomText} */
+    const getRandomElement = elements => {
+    	while (true) {
+    		const randomIndex = rng(0, elements.length);
+    		// After each iteration, avoid repeating the last text from the last iteration
+    		const isTextDifferentFromPrevious =
+    			typeof alreadyChoosenTexts === 'number' && randomIndex !== alreadyChoosenTexts;
+    		const isTextFirstTime =
+    			Array.isArray(alreadyChoosenTexts) && !alreadyChoosenTexts.includes(randomIndex);
+    		const hasSingleChildElement = elements.length === 1;
+    		const shouldAnimate =
+    			hasSingleChildElement || isTextFirstTime || isTextDifferentFromPrevious;
+    		if (shouldAnimate) {
+    			isTextDifferentFromPrevious && (alreadyChoosenTexts = []);
+    			alreadyChoosenTexts.push(randomIndex);
+    			const randomText = elements[randomIndex];
+    			return randomText
+    		}
+    		const restartRandomizationCycle = alreadyChoosenTexts.length === elements.length;
+    		restartRandomizationCycle && (alreadyChoosenTexts = alreadyChoosenTexts.pop());
+    	}
+    };
+
+    /** @type {import('types').TypewriterEffectFn} */
+    const loopTypewriter = async ({ currentNode, text }, options) => {
+    	await writeEffect({ currentNode, text }, options);
+    	const textWithUnescapedAmpersands = text.replaceAll('&', '&amp;');
+    	const fullyWritten = currentNode.innerHTML === textWithUnescapedAmpersands;
+    	fullyWritten && (await unwriteEffect(currentNode, options));
+    	runOnEveryParentUntil(currentNode, options.parentElement, element => {
+    		currentNode === element
+    			? element.classList.remove('typing')
+    			: element.classList.remove('finished-typing');
+    	});
+    };
+
+    /** @type {import('types').TypewriterModeFn} */
+    const mode$2 = async (elements, options) => {
+    	while (true) {
+    		if (options.loop) {
+    			for (const element of elements) await loopTypewriter(element, options);
+    		} else if (options.loopRandom) {
+    			const element = getRandomElement(elements);
+    			await loopTypewriter(element, options);
+    		}
+    	}
+    };
+
+    var loopTypewriter$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        mode: mode$2
+    });
+
+    const getRandomNumber = (min, max) => Math.floor(Math.random() * (max - min)) + min;
+
+    const getRandomLetter = () => {
+    	const possibleLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.split(
+    		''
+    	);
+    	const letterIndexLimit = possibleLetters.length;
+    	const randomLetterIndex = getRandomNumber(0, letterIndexLimit);
+    	const randomLetter = possibleLetters[randomLetterIndex];
+    	return randomLetter
+    };
+
+    // returns a array with a timeout (in ms) for each letter of the word
+    const getLettersTimeout = (textLetters, timeout) => {
+    	const minimumTimeoutPossible = timeout / 3;
+    	// TODO: find a better way to deal with this instead of explicitly reducing the maximum timeout
+    	// otherwise, at the end of the animation, one or two characters remain scrambled
+    	const lettersTimeout = textLetters.map(() =>
+    		getRandomNumber(minimumTimeoutPossible, timeout - 100)
+    	);
+    	return lettersTimeout
+    };
+
+    /** @type {TypewriterModeFn} */
+    const mode$1 = async (elements, options) => {
+    	const timeout = typeof options.scramble == 'number' ? options.scramble : 3000;
+    	await new Promise(resolve => {
+    		elements.forEach(async ({ currentNode, text }) => {
+    			let wordLetters = text.split('');
+    			const lettersTimeout = getLettersTimeout(wordLetters, timeout);
+    			const startingTime = Date.now();
+
+    			runOnEveryParentUntil(currentNode, options.parentElement, element => {
+    				element.classList.add('finished-typing');
+    			});
+
+    			while (Date.now() - startingTime < timeout) {
+    				const randomLetterIndex = getRandomNumber(0, wordLetters.length);
+    				const randomLetterTimeout = lettersTimeout[randomLetterIndex];
+    				const isRandomLetterWhitespace = wordLetters[randomLetterIndex] === ' ';
+    				const timeEllapsed = () => Date.now() - startingTime;
+    				const didRandomLetterReachTimeout = () => timeEllapsed() >= randomLetterTimeout;
+
+    				if (didRandomLetterReachTimeout() || isRandomLetterWhitespace) {
+    					const letterFinishedAnimation =
+    						wordLetters[randomLetterIndex] === text[randomLetterIndex];
+
+    					if (!letterFinishedAnimation)
+    						wordLetters[randomLetterIndex] = text[randomLetterIndex];
+    					else continue
+    				} else {
+    					wordLetters[randomLetterIndex] = getRandomLetter();
+    				}
+
+    				const scrambledText = wordLetters.join('');
+    				currentNode.innerHTML = scrambledText;
+
+    				const finishedScrambling = scrambledText === text;
+
+    				const letterInterval = options.scrambleSlowdown
+    					? Math.round(timeEllapsed() / 100)
+    					: 1;
+
+    				await sleep(letterInterval);
+
+    				if (finishedScrambling) {
+    					resolve();
+    					break
+    				}
+    			}
+    		});
+    	});
+    	options.dispatch('done');
+    };
+
+    var scramble = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        mode: mode$1
+    });
+
+    /** @type {import(types').OnAnimationEnd} */
+    const onAnimationEnd = (element, callback) => {
+    	const observer = new MutationObserver(mutations => {
+    		mutations.forEach(mutation => {
+    			const elementAttributeChanged = mutation.type === 'attributes';
+    			const elementFinishedTyping = mutation.target.classList.contains('typing');
+    			if (elementAttributeChanged && elementFinishedTyping) callback();
+    		});
+    	});
+
+    	observer.observe(element, {
+    		attributes: true,
+    		childList: true,
+    		subtree: true
+    	});
+    };
+
+    const cleanChildText = elements =>
+    	elements.forEach(element => (element.currentNode.textContent = ''));
+
+    /** @type {import('types').TypewriterOptions} */
+    const mode = async (elements, options) => {
+    	if (options.cascade) {
+    		cleanChildText(elements);
+    	} else {
+    		const { getLongestTextElement } = await Promise.resolve().then(function () { return getLongestTextElement$1; });
+    		const lastElementToFinish = getLongestTextElement(elements);
+    		onAnimationEnd(lastElementToFinish, () => options.dispatch('done'));
+    	}
+    	for (const element of elements) {
+    		if (options.cascade) {
+    			await writeEffect(element, options);
+    			element.currentNode.classList.replace('typing', 'finished-typing');
+    		} else {
+    			writeEffect(element, options).then(() => {
+    				element.currentNode.classList.replace('typing', 'finished-typing');
+    			});
+    		}
+    	}
+
+    	options.cascade && options.dispatch('done');
+    };
+
+    var typewriter = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        mode: mode
+    });
+
+    /** @type {import(types').DescendingSortFunction} */
+    const descendingSortFunction = (firstElement, secondElement) =>
+    	secondElement.text.length - firstElement.text.length;
+
+    /** @type {import(types').GetLongestTextElement} */
+    const getLongestTextElement = elements => {
+    	const descendingTextLengthOrder = elements.sort(descendingSortFunction);
+    	const longestTextElement = descendingTextLengthOrder[0].currentNode;
+    	return longestTextElement
+    };
+
+    var getLongestTextElement$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        getLongestTextElement: getLongestTextElement
     });
 
     return app;

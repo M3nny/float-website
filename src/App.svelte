@@ -1,9 +1,11 @@
 <script>
 	import Typewriter from 'svelte-typewriter';
+
 	let background;
 	let floating_island;
 	let grass;
 	let text;
+	
 
 	window.addEventListener('scroll', function(){
 		var value = window.scrollY;
@@ -14,6 +16,7 @@
 		text.style.top = value * 1 + 'px';
 
 	})
+
 </script>
 
 <main>
@@ -22,10 +25,21 @@
 		<img bind:this={floating_island} src="images/floating_island.png" id="floating_island" alt = "floating_island">
 		<img bind:this={grass} src="images/grass.png" id="grass" alt = "grass">
 
-		<Typewriter interval={200}>
+		<Typewriter interval={150} cursor={false}>
 			<h2 bind:this={text} id="text">Welcome</h2>
 		</Typewriter>
 	</section>
+
+	<div class="font-9xl flex flex-wrap justify-center my-8">
+		<div>
+			<img src="images/bot_icon.png" alt="bi" class="object-contain h-48 w-96" />
+		<div>
+
+		<h1 class="text-center" style="font-size: 50px;">6</h1>
+		<h2 class="text-center" style="font-size: 35px;">Songs played</h2>
+		
+	</div>
+	
 
 
 	

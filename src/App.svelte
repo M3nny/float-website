@@ -1,5 +1,6 @@
 <script>
 	import Typewriter from 'svelte-typewriter';
+	
 
 	let background;
 	let floating_island;
@@ -32,13 +33,52 @@
 
 	<div class="font-9xl flex flex-wrap justify-center my-8">
 		<div>
-			<img src="images/bot_icon.png" alt="bi" class="object-contain h-48 w-96" />
+			<img src="images/bot_icon.png" alt="bi" class=" mx-auto object-contain h-48 w-96" />
 		<div>
 
-		<h1 class="text-center" style="font-size: 50px;">6</h1>
-		<h2 class="text-center" style="font-size: 35px;">Songs played</h2>
+		<h1 class="text-center" style="font-size: 50px;">Float</h1>
+		<h2 class="text-center" style="font-size: 35px;">music bot for discord</h2>
 		
 	</div>
+	
+	<div class="h-56 grid grid-cols-3 gap-4 content-center">
+		<div>
+			<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+			</svg>
+			<p class="text-xl">Simple and easy</p>
+			<p>Only a few commands <br> without any distractions.</p>
+		</div>
+
+		<div>
+			<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+			</svg>
+			<p class="text-xl">Anti-afk</p>
+			<p>Float leaves the room automatically <br> after being inactive for a period of time.</p>
+		</div>
+
+		<div>
+			<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+			</svg>
+			<p class="text-xl">Music from youtube like no others</p>
+			<p>The music is streamed from youtube <br> providing a fast experience.</p>
+		</div>
+	</div>
+
+	<div class="h-56 grid grid-cols-2 gap-20 content-center">
+		<div>
+			<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+			</svg>
+			<p class="text-xl">Slash commands</p>
+			<p>Write commands faster <br> using the slashed notation.</p>
+		</div>
+
+	
+	</div>
+	
 	
 
 
@@ -62,7 +102,7 @@
 
 	main {
 		background: #ff7d57;
-		min-height: 1500px;
+		min-height: 3000px;
 	}
 
 	section {

@@ -4,6 +4,7 @@ var app = (function () {
     'use strict';
 
     function noop() { }
+    const identity = x => x;
     function assign(tar, src) {
         // @ts-ignore
         for (const k in src)
@@ -90,8 +91,60 @@ var app = (function () {
     function action_destroyer(action_result) {
         return action_result && is_function(action_result.destroy) ? action_result.destroy : noop;
     }
+
+    const is_client = typeof window !== 'undefined';
+    let now = is_client
+        ? () => window.performance.now()
+        : () => Date.now();
+    let raf = is_client ? cb => requestAnimationFrame(cb) : noop;
+
+    const tasks = new Set();
+    function run_tasks(now) {
+        tasks.forEach(task => {
+            if (!task.c(now)) {
+                tasks.delete(task);
+                task.f();
+            }
+        });
+        if (tasks.size !== 0)
+            raf(run_tasks);
+    }
+    /**
+     * Creates a new task that runs on each raf frame
+     * until it returns a falsy value or is aborted
+     */
+    function loop(callback) {
+        let task;
+        if (tasks.size === 0)
+            raf(run_tasks);
+        return {
+            promise: new Promise(fulfill => {
+                tasks.add(task = { c: callback, f: fulfill });
+            }),
+            abort() {
+                tasks.delete(task);
+            }
+        };
+    }
     function append(target, node) {
         target.appendChild(node);
+    }
+    function get_root_for_style(node) {
+        if (!node)
+            return document;
+        const root = node.getRootNode ? node.getRootNode() : node.ownerDocument;
+        if (root && root.host) {
+            return root;
+        }
+        return node.ownerDocument;
+    }
+    function append_empty_stylesheet(node) {
+        const style_element = element('style');
+        append_stylesheet(get_root_for_style(node), style_element);
+        return style_element;
+    }
+    function append_stylesheet(node, style) {
+        append(node.head || node, style);
     }
     function insert(target, node, anchor) {
         target.insertBefore(node, anchor || null);
@@ -130,6 +183,67 @@ var app = (function () {
         const e = document.createEvent('CustomEvent');
         e.initCustomEvent(type, bubbles, false, detail);
         return e;
+    }
+
+    const active_docs = new Set();
+    let active = 0;
+    // https://github.com/darkskyapp/string-hash/blob/master/index.js
+    function hash(str) {
+        let hash = 5381;
+        let i = str.length;
+        while (i--)
+            hash = ((hash << 5) - hash) ^ str.charCodeAt(i);
+        return hash >>> 0;
+    }
+    function create_rule(node, a, b, duration, delay, ease, fn, uid = 0) {
+        const step = 16.666 / duration;
+        let keyframes = '{\n';
+        for (let p = 0; p <= 1; p += step) {
+            const t = a + (b - a) * ease(p);
+            keyframes += p * 100 + `%{${fn(t, 1 - t)}}\n`;
+        }
+        const rule = keyframes + `100% {${fn(b, 1 - b)}}\n}`;
+        const name = `__svelte_${hash(rule)}_${uid}`;
+        const doc = get_root_for_style(node);
+        active_docs.add(doc);
+        const stylesheet = doc.__svelte_stylesheet || (doc.__svelte_stylesheet = append_empty_stylesheet(node).sheet);
+        const current_rules = doc.__svelte_rules || (doc.__svelte_rules = {});
+        if (!current_rules[name]) {
+            current_rules[name] = true;
+            stylesheet.insertRule(`@keyframes ${name} ${rule}`, stylesheet.cssRules.length);
+        }
+        const animation = node.style.animation || '';
+        node.style.animation = `${animation ? `${animation}, ` : ''}${name} ${duration}ms linear ${delay}ms 1 both`;
+        active += 1;
+        return name;
+    }
+    function delete_rule(node, name) {
+        const previous = (node.style.animation || '').split(', ');
+        const next = previous.filter(name
+            ? anim => anim.indexOf(name) < 0 // remove specific animation
+            : anim => anim.indexOf('__svelte') === -1 // remove all Svelte animations
+        );
+        const deleted = previous.length - next.length;
+        if (deleted) {
+            node.style.animation = next.join(', ');
+            active -= deleted;
+            if (!active)
+                clear_rules();
+        }
+    }
+    function clear_rules() {
+        raf(() => {
+            if (active)
+                return;
+            active_docs.forEach(doc => {
+                const stylesheet = doc.__svelte_stylesheet;
+                let i = stylesheet.cssRules.length;
+                while (i--)
+                    stylesheet.deleteRule(i);
+                doc.__svelte_rules = {};
+            });
+            active_docs.clear();
+        });
     }
 
     let current_component;
@@ -237,6 +351,20 @@ var app = (function () {
             $$.after_update.forEach(add_render_callback);
         }
     }
+
+    let promise;
+    function wait() {
+        if (!promise) {
+            promise = Promise.resolve();
+            promise.then(() => {
+                promise = null;
+            });
+        }
+        return promise;
+    }
+    function dispatch(node, direction, kind) {
+        node.dispatchEvent(custom_event(`${direction ? 'intro' : 'outro'}${kind}`));
+    }
     const outroing = new Set();
     let outros;
     function transition_in(block, local) {
@@ -260,6 +388,112 @@ var app = (function () {
             });
             block.o(local);
         }
+    }
+    const null_transition = { duration: 0 };
+    function create_bidirectional_transition(node, fn, params, intro) {
+        let config = fn(node, params);
+        let t = intro ? 0 : 1;
+        let running_program = null;
+        let pending_program = null;
+        let animation_name = null;
+        function clear_animation() {
+            if (animation_name)
+                delete_rule(node, animation_name);
+        }
+        function init(program, duration) {
+            const d = (program.b - t);
+            duration *= Math.abs(d);
+            return {
+                a: t,
+                b: program.b,
+                d,
+                duration,
+                start: program.start,
+                end: program.start + duration,
+                group: program.group
+            };
+        }
+        function go(b) {
+            const { delay = 0, duration = 300, easing = identity, tick = noop, css } = config || null_transition;
+            const program = {
+                start: now() + delay,
+                b
+            };
+            if (!b) {
+                // @ts-ignore todo: improve typings
+                program.group = outros;
+                outros.r += 1;
+            }
+            if (running_program || pending_program) {
+                pending_program = program;
+            }
+            else {
+                // if this is an intro, and there's a delay, we need to do
+                // an initial tick and/or apply CSS animation immediately
+                if (css) {
+                    clear_animation();
+                    animation_name = create_rule(node, t, b, duration, delay, easing, css);
+                }
+                if (b)
+                    tick(0, 1);
+                running_program = init(program, duration);
+                add_render_callback(() => dispatch(node, b, 'start'));
+                loop(now => {
+                    if (pending_program && now > pending_program.start) {
+                        running_program = init(pending_program, duration);
+                        pending_program = null;
+                        dispatch(node, running_program.b, 'start');
+                        if (css) {
+                            clear_animation();
+                            animation_name = create_rule(node, t, running_program.b, running_program.duration, 0, easing, config.css);
+                        }
+                    }
+                    if (running_program) {
+                        if (now >= running_program.end) {
+                            tick(t = running_program.b, 1 - t);
+                            dispatch(node, running_program.b, 'end');
+                            if (!pending_program) {
+                                // we're done
+                                if (running_program.b) {
+                                    // intro — we can tidy up immediately
+                                    clear_animation();
+                                }
+                                else {
+                                    // outro — needs to be coordinated
+                                    if (!--running_program.group.r)
+                                        run_all(running_program.group.c);
+                                }
+                            }
+                            running_program = null;
+                        }
+                        else if (now >= running_program.start) {
+                            const p = now - running_program.start;
+                            t = running_program.a + running_program.d * easing(p / running_program.duration);
+                            tick(t, 1 - t);
+                        }
+                    }
+                    return !!(running_program || pending_program);
+                });
+            }
+        }
+        return {
+            run(b) {
+                if (is_function(config)) {
+                    wait().then(() => {
+                        // @ts-ignore
+                        config = config();
+                        go(b);
+                    });
+                }
+                else {
+                    go(b);
+                }
+            },
+            end() {
+                clear_animation();
+                running_program = pending_program = null;
+            }
+        };
     }
     function create_component(block) {
         block && block.c();
@@ -814,10 +1048,39 @@ var app = (function () {
     	}
     }
 
+    function cubicOut(t) {
+        const f = t - 1.0;
+        return f * f * f + 1.0;
+    }
+
+    function fade(node, { delay = 0, duration = 400, easing = identity } = {}) {
+        const o = +getComputedStyle(node).opacity;
+        return {
+            delay,
+            duration,
+            easing,
+            css: t => `opacity: ${t * o}`
+        };
+    }
+    function fly(node, { delay = 0, duration = 400, easing = cubicOut, x = 0, y = 0, opacity = 0 } = {}) {
+        const style = getComputedStyle(node);
+        const target_opacity = +style.opacity;
+        const transform = style.transform === 'none' ? '' : style.transform;
+        const od = target_opacity * (1 - opacity);
+        return {
+            delay,
+            duration,
+            easing,
+            css: (t, u) => `
+			transform: ${transform} translate(${(1 - t) * x}px, ${(1 - t) * y}px);
+			opacity: ${target_opacity - (od * u)}`
+        };
+    }
+
     /* src/App.svelte generated by Svelte v3.44.3 */
     const file = "src/App.svelte";
 
-    // (29:2) <Typewriter interval={150} cursor={false}>
+    // (32:2) <Typewriter interval={150} cursor={false}>
     function create_default_slot(ctx) {
     	let h2;
 
@@ -826,7 +1089,7 @@ var app = (function () {
     			h2 = element("h2");
     			h2.textContent = "Welcome";
     			attr_dev(h2, "id", "text");
-    			add_location(h2, file, 29, 3, 733);
+    			add_location(h2, file, 32, 3, 820);
     		},
     		m: function mount(target, anchor) {
     			insert_dev(target, h2, anchor);
@@ -843,7 +1106,7 @@ var app = (function () {
     		block,
     		id: create_default_slot.name,
     		type: "slot",
-    		source: "(29:2) <Typewriter interval={150} cursor={false}>",
+    		source: "(32:2) <Typewriter interval={150} cursor={false}>",
     		ctx
     	});
 
@@ -864,61 +1127,68 @@ var app = (function () {
     	let t2;
     	let typewriter;
     	let t3;
+    	let div9;
+    	let div0;
+    	let t5;
     	let div8;
-    	let div7;
     	let img3;
     	let img3_src_value;
-    	let t4;
-    	let div0;
-    	let h1;
     	let t6;
-    	let h2;
-    	let t8;
-    	let div4;
     	let div1;
+    	let h1;
+    	let t8;
+    	let h2;
+    	let t10;
+    	let div7;
+    	let div2;
     	let svg0;
     	let path0;
-    	let t9;
-    	let p0;
     	let t11;
-    	let p1;
-    	let t12;
-    	let br0;
+    	let p0;
     	let t13;
+    	let p1;
     	let t14;
-    	let div2;
+    	let br0;
+    	let t15;
+    	let div2_transition;
+    	let t16;
+    	let div3;
     	let svg1;
     	let path1;
-    	let t15;
-    	let p2;
     	let t17;
-    	let p3;
-    	let t18;
-    	let br1;
+    	let p2;
     	let t19;
+    	let p3;
     	let t20;
-    	let div3;
+    	let br1;
+    	let t21;
+    	let div3_transition;
+    	let t22;
+    	let div4;
     	let svg2;
     	let path2;
-    	let t21;
-    	let p4;
     	let t23;
-    	let p5;
-    	let t24;
-    	let br2;
+    	let p4;
     	let t25;
+    	let p5;
     	let t26;
-    	let div6;
+    	let br2;
+    	let t27;
+    	let div4_transition;
+    	let t28;
     	let div5;
+    	let t29;
+    	let div6;
     	let svg3;
     	let path3;
-    	let t27;
-    	let p6;
-    	let t29;
-    	let p7;
     	let t30;
+    	let p6;
+    	let t32;
+    	let p7;
+    	let t33;
     	let br3;
-    	let t31;
+    	let t34;
+    	let div6_transition;
     	let current;
 
     	typewriter = new Typewriter({
@@ -943,162 +1213,166 @@ var app = (function () {
     			t2 = space();
     			create_component(typewriter.$$.fragment);
     			t3 = space();
-    			div8 = element("div");
-    			div7 = element("div");
-    			img3 = element("img");
-    			t4 = space();
+    			div9 = element("div");
     			div0 = element("div");
+    			div0.textContent = "asd";
+    			t5 = space();
+    			div8 = element("div");
+    			img3 = element("img");
+    			t6 = space();
+    			div1 = element("div");
     			h1 = element("h1");
     			h1.textContent = "Float";
-    			t6 = space();
+    			t8 = space();
     			h2 = element("h2");
     			h2.textContent = "music bot for discord";
-    			t8 = space();
-    			div4 = element("div");
-    			div1 = element("div");
+    			t10 = space();
+    			div7 = element("div");
+    			div2 = element("div");
     			svg0 = svg_element("svg");
     			path0 = svg_element("path");
-    			t9 = space();
+    			t11 = space();
     			p0 = element("p");
     			p0.textContent = "Simple and easy";
-    			t11 = space();
+    			t13 = space();
     			p1 = element("p");
-    			t12 = text("Only a few commands ");
+    			t14 = text("Only a few commands ");
     			br0 = element("br");
-    			t13 = text(" without any distractions.");
-    			t14 = space();
-    			div2 = element("div");
+    			t15 = text(" without any distractions.");
+    			t16 = space();
+    			div3 = element("div");
     			svg1 = svg_element("svg");
     			path1 = svg_element("path");
-    			t15 = space();
+    			t17 = space();
     			p2 = element("p");
     			p2.textContent = "Anti-afk";
-    			t17 = space();
+    			t19 = space();
     			p3 = element("p");
-    			t18 = text("Float leaves the room automatically ");
+    			t20 = text("Float leaves the room automatically ");
     			br1 = element("br");
-    			t19 = text(" after being inactive for a period of time.");
-    			t20 = space();
-    			div3 = element("div");
+    			t21 = text(" after being inactive for a period of time.");
+    			t22 = space();
+    			div4 = element("div");
     			svg2 = svg_element("svg");
     			path2 = svg_element("path");
-    			t21 = space();
+    			t23 = space();
     			p4 = element("p");
     			p4.textContent = "Music from youtube like no others";
-    			t23 = space();
+    			t25 = space();
     			p5 = element("p");
-    			t24 = text("The music is streamed from youtube ");
+    			t26 = text("The music is streamed from youtube ");
     			br2 = element("br");
-    			t25 = text(" providing a fast experience.");
-    			t26 = space();
-    			div6 = element("div");
+    			t27 = text(" providing a fast experience.");
+    			t28 = space();
     			div5 = element("div");
+    			t29 = space();
+    			div6 = element("div");
     			svg3 = svg_element("svg");
     			path3 = svg_element("path");
-    			t27 = space();
+    			t30 = space();
     			p6 = element("p");
     			p6.textContent = "Slash commands";
-    			t29 = space();
+    			t32 = space();
     			p7 = element("p");
-    			t30 = text("Write commands faster ");
+    			t33 = text("Write commands faster ");
     			br3 = element("br");
-    			t31 = text(" using the slashed notation.");
+    			t34 = text(" using the slashed notation.");
     			if (!src_url_equal(img0.src, img0_src_value = "images/background.png")) attr_dev(img0, "src", img0_src_value);
     			attr_dev(img0, "id", "bg");
     			attr_dev(img0, "alt", "background");
-    			add_location(img0, file, 24, 2, 412);
+    			add_location(img0, file, 27, 2, 499);
     			if (!src_url_equal(img1.src, img1_src_value = "images/floating_island.png")) attr_dev(img1, "src", img1_src_value);
     			attr_dev(img1, "id", "floating_island");
     			attr_dev(img1, "alt", "floating_island");
-    			add_location(img1, file, 25, 2, 498);
+    			add_location(img1, file, 28, 2, 585);
     			if (!src_url_equal(img2.src, img2_src_value = "images/grass.png")) attr_dev(img2, "src", img2_src_value);
     			attr_dev(img2, "id", "grass");
     			attr_dev(img2, "alt", "grass");
-    			add_location(img2, file, 26, 2, 612);
-    			add_location(section, file, 23, 1, 400);
+    			add_location(img2, file, 29, 2, 699);
+    			add_location(section, file, 26, 1, 487);
+    			add_location(div0, file, 37, 2, 954);
     			if (!src_url_equal(img3.src, img3_src_value = "images/bot_icon.png")) attr_dev(img3, "src", img3_src_value);
     			attr_dev(img3, "alt", "bi");
     			attr_dev(img3, "class", "mx-auto object-contain h-48 w-96");
-    			add_location(img3, file, 35, 3, 876);
+    			add_location(img3, file, 39, 3, 980);
     			attr_dev(h1, "class", "text-center");
     			set_style(h1, "font-size", "50px");
-    			add_location(h1, file, 38, 2, 972);
+    			add_location(h1, file, 42, 2, 1076);
     			attr_dev(h2, "class", "text-center");
     			set_style(h2, "font-size", "35px");
-    			add_location(h2, file, 39, 2, 1034);
-    			add_location(div0, file, 36, 2, 963);
+    			add_location(h2, file, 43, 2, 1138);
+    			add_location(div1, file, 40, 2, 1067);
     			attr_dev(path0, "stroke-linecap", "round");
     			attr_dev(path0, "stroke-linejoin", "round");
     			attr_dev(path0, "stroke-width", "2");
     			attr_dev(path0, "d", "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z");
-    			add_location(path0, file, 46, 4, 1307);
+    			add_location(path0, file, 49, 4, 1467);
     			attr_dev(svg0, "xmlns", "http://www.w3.org/2000/svg");
     			attr_dev(svg0, "class", "h-6 w-6");
     			attr_dev(svg0, "fill", "none");
     			attr_dev(svg0, "viewBox", "0 0 24 24");
     			attr_dev(svg0, "stroke", "currentColor");
-    			add_location(svg0, file, 45, 3, 1192);
+    			add_location(svg0, file, 48, 3, 1352);
     			attr_dev(p0, "class", "text-xl");
-    			add_location(p0, file, 48, 3, 1443);
-    			add_location(br0, file, 49, 26, 1508);
-    			add_location(p1, file, 49, 3, 1485);
-    			add_location(div1, file, 44, 2, 1183);
+    			add_location(p0, file, 51, 3, 1603);
+    			add_location(br0, file, 52, 26, 1668);
+    			add_location(p1, file, 52, 3, 1645);
+    			add_location(div2, file, 47, 2, 1285);
     			attr_dev(path1, "stroke-linecap", "round");
     			attr_dev(path1, "stroke-linejoin", "round");
     			attr_dev(path1, "stroke-width", "2");
     			attr_dev(path1, "d", "M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636");
-    			add_location(path1, file, 54, 4, 1679);
+    			add_location(path1, file, 57, 4, 1896);
     			attr_dev(svg1, "xmlns", "http://www.w3.org/2000/svg");
     			attr_dev(svg1, "class", "h-6 w-6");
     			attr_dev(svg1, "fill", "none");
     			attr_dev(svg1, "viewBox", "0 0 24 24");
     			attr_dev(svg1, "stroke", "currentColor");
-    			add_location(svg1, file, 53, 3, 1564);
+    			add_location(svg1, file, 56, 3, 1781);
     			attr_dev(p2, "class", "text-xl");
-    			add_location(p2, file, 56, 3, 1864);
-    			add_location(br1, file, 57, 42, 1938);
-    			add_location(p3, file, 57, 3, 1899);
-    			add_location(div2, file, 52, 2, 1555);
+    			add_location(p2, file, 59, 3, 2081);
+    			add_location(br1, file, 60, 42, 2155);
+    			add_location(p3, file, 60, 3, 2116);
+    			add_location(div3, file, 55, 2, 1715);
     			attr_dev(path2, "stroke-linecap", "round");
     			attr_dev(path2, "stroke-linejoin", "round");
     			attr_dev(path2, "stroke-width", "2");
     			attr_dev(path2, "d", "M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3");
-    			add_location(path2, file, 62, 4, 2126);
+    			add_location(path2, file, 65, 4, 2400);
     			attr_dev(svg2, "xmlns", "http://www.w3.org/2000/svg");
     			attr_dev(svg2, "class", "h-6 w-6");
     			attr_dev(svg2, "fill", "none");
     			attr_dev(svg2, "viewBox", "0 0 24 24");
     			attr_dev(svg2, "stroke", "currentColor");
-    			add_location(svg2, file, 61, 3, 2011);
+    			add_location(svg2, file, 64, 3, 2285);
     			attr_dev(p4, "class", "text-xl");
-    			add_location(p4, file, 64, 3, 2364);
-    			add_location(br2, file, 65, 41, 2462);
-    			add_location(p5, file, 65, 3, 2424);
-    			add_location(div3, file, 60, 2, 2002);
-    			attr_dev(div4, "class", "h-56 grid grid-cols-3 gap-4 content-center");
-    			add_location(div4, file, 43, 1, 1124);
+    			add_location(p4, file, 67, 3, 2638);
+    			add_location(br2, file, 68, 41, 2736);
+    			add_location(p5, file, 68, 3, 2698);
+    			add_location(div4, file, 63, 2, 2219);
+    			add_location(div5, file, 71, 2, 2786);
     			attr_dev(path3, "stroke-linecap", "round");
     			attr_dev(path3, "stroke-linejoin", "round");
     			attr_dev(path3, "stroke-width", "2");
     			attr_dev(path3, "d", "M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z");
-    			add_location(path3, file, 72, 4, 2703);
+    			add_location(path3, file, 75, 4, 2975);
     			attr_dev(svg3, "xmlns", "http://www.w3.org/2000/svg");
     			attr_dev(svg3, "class", "h-6 w-6");
     			attr_dev(svg3, "fill", "none");
     			attr_dev(svg3, "viewBox", "0 0 24 24");
     			attr_dev(svg3, "stroke", "currentColor");
-    			add_location(svg3, file, 71, 3, 2588);
+    			add_location(svg3, file, 74, 3, 2860);
     			attr_dev(p6, "class", "text-xl");
-    			add_location(p6, file, 74, 3, 2898);
-    			add_location(br3, file, 75, 28, 2964);
-    			add_location(p7, file, 75, 3, 2939);
-    			add_location(div5, file, 70, 2, 2579);
-    			attr_dev(div6, "class", "h-56 grid grid-cols-2 gap-20 content-center");
-    			add_location(div6, file, 69, 1, 2519);
-    			add_location(div7, file, 34, 2, 867);
-    			attr_dev(div8, "class", "font-9xl flex flex-wrap justify-center my-8");
-    			add_location(div8, file, 33, 1, 807);
-    			add_location(main, file, 22, 0, 392);
+    			add_location(p6, file, 77, 3, 3170);
+    			add_location(br3, file, 78, 28, 3236);
+    			add_location(p7, file, 78, 3, 3211);
+    			add_location(div6, file, 73, 2, 2801);
+    			attr_dev(div7, "class", "h-56 grid grid-cols-3 gap-4 content-center");
+    			add_location(div7, file, 46, 1, 1226);
+    			add_location(div8, file, 38, 2, 971);
+    			attr_dev(div9, "class", "font-9xl flex flex-wrap justify-center my-8");
+    			add_location(div9, file, 36, 1, 894);
+    			add_location(main, file, 24, 0, 477);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1117,60 +1391,63 @@ var app = (function () {
     			append_dev(section, t2);
     			mount_component(typewriter, section, null);
     			append_dev(main, t3);
-    			append_dev(main, div8);
+    			append_dev(main, div9);
+    			append_dev(div9, div0);
+    			append_dev(div9, t5);
+    			append_dev(div9, div8);
+    			append_dev(div8, img3);
+    			append_dev(div8, t6);
+    			append_dev(div8, div1);
+    			append_dev(div1, h1);
+    			append_dev(div1, t8);
+    			append_dev(div1, h2);
+    			append_dev(div8, t10);
     			append_dev(div8, div7);
-    			append_dev(div7, img3);
-    			append_dev(div7, t4);
-    			append_dev(div7, div0);
-    			append_dev(div0, h1);
-    			append_dev(div0, t6);
-    			append_dev(div0, h2);
-    			append_dev(div7, t8);
-    			append_dev(div7, div4);
-    			append_dev(div4, div1);
-    			append_dev(div1, svg0);
+    			append_dev(div7, div2);
+    			append_dev(div2, svg0);
     			append_dev(svg0, path0);
-    			append_dev(div1, t9);
-    			append_dev(div1, p0);
-    			append_dev(div1, t11);
-    			append_dev(div1, p1);
-    			append_dev(p1, t12);
+    			append_dev(div2, t11);
+    			append_dev(div2, p0);
+    			append_dev(div2, t13);
+    			append_dev(div2, p1);
+    			append_dev(p1, t14);
     			append_dev(p1, br0);
-    			append_dev(p1, t13);
-    			append_dev(div4, t14);
-    			append_dev(div4, div2);
-    			append_dev(div2, svg1);
+    			append_dev(p1, t15);
+    			append_dev(div7, t16);
+    			append_dev(div7, div3);
+    			append_dev(div3, svg1);
     			append_dev(svg1, path1);
-    			append_dev(div2, t15);
-    			append_dev(div2, p2);
-    			append_dev(div2, t17);
-    			append_dev(div2, p3);
-    			append_dev(p3, t18);
+    			append_dev(div3, t17);
+    			append_dev(div3, p2);
+    			append_dev(div3, t19);
+    			append_dev(div3, p3);
+    			append_dev(p3, t20);
     			append_dev(p3, br1);
-    			append_dev(p3, t19);
-    			append_dev(div4, t20);
-    			append_dev(div4, div3);
-    			append_dev(div3, svg2);
+    			append_dev(p3, t21);
+    			append_dev(div7, t22);
+    			append_dev(div7, div4);
+    			append_dev(div4, svg2);
     			append_dev(svg2, path2);
-    			append_dev(div3, t21);
-    			append_dev(div3, p4);
-    			append_dev(div3, t23);
-    			append_dev(div3, p5);
-    			append_dev(p5, t24);
+    			append_dev(div4, t23);
+    			append_dev(div4, p4);
+    			append_dev(div4, t25);
+    			append_dev(div4, p5);
+    			append_dev(p5, t26);
     			append_dev(p5, br2);
-    			append_dev(p5, t25);
-    			append_dev(div7, t26);
+    			append_dev(p5, t27);
+    			append_dev(div7, t28);
+    			append_dev(div7, div5);
+    			append_dev(div7, t29);
     			append_dev(div7, div6);
-    			append_dev(div6, div5);
-    			append_dev(div5, svg3);
+    			append_dev(div6, svg3);
     			append_dev(svg3, path3);
-    			append_dev(div5, t27);
-    			append_dev(div5, p6);
-    			append_dev(div5, t29);
-    			append_dev(div5, p7);
-    			append_dev(p7, t30);
+    			append_dev(div6, t30);
+    			append_dev(div6, p6);
+    			append_dev(div6, t32);
+    			append_dev(div6, p7);
+    			append_dev(p7, t33);
     			append_dev(p7, br3);
-    			append_dev(p7, t31);
+    			append_dev(p7, t34);
     			current = true;
     		},
     		p: function update(ctx, [dirty]) {
@@ -1185,10 +1462,39 @@ var app = (function () {
     		i: function intro(local) {
     			if (current) return;
     			transition_in(typewriter.$$.fragment, local);
+
+    			add_render_callback(() => {
+    				if (!div2_transition) div2_transition = create_bidirectional_transition(div2, fly, { x: -500, duration: 1000, delay: 2000 }, true);
+    				div2_transition.run(1);
+    			});
+
+    			add_render_callback(() => {
+    				if (!div3_transition) div3_transition = create_bidirectional_transition(div3, fly, { y: 500, duration: 1000, delay: 2000 }, true);
+    				div3_transition.run(1);
+    			});
+
+    			add_render_callback(() => {
+    				if (!div4_transition) div4_transition = create_bidirectional_transition(div4, fly, { x: 500, duration: 1000, delay: 2000 }, true);
+    				div4_transition.run(1);
+    			});
+
+    			add_render_callback(() => {
+    				if (!div6_transition) div6_transition = create_bidirectional_transition(div6, fade, { duration: 2000, delay: 2500 }, true);
+    				div6_transition.run(1);
+    			});
+
     			current = true;
     		},
     		o: function outro(local) {
     			transition_out(typewriter.$$.fragment, local);
+    			if (!div2_transition) div2_transition = create_bidirectional_transition(div2, fly, { x: -500, duration: 1000, delay: 2000 }, false);
+    			div2_transition.run(0);
+    			if (!div3_transition) div3_transition = create_bidirectional_transition(div3, fly, { y: 500, duration: 1000, delay: 2000 }, false);
+    			div3_transition.run(0);
+    			if (!div4_transition) div4_transition = create_bidirectional_transition(div4, fly, { x: 500, duration: 1000, delay: 2000 }, false);
+    			div4_transition.run(0);
+    			if (!div6_transition) div6_transition = create_bidirectional_transition(div6, fade, { duration: 2000, delay: 2500 }, false);
+    			div6_transition.run(0);
     			current = false;
     		},
     		d: function destroy(detaching) {
@@ -1197,6 +1503,10 @@ var app = (function () {
     			/*img1_binding*/ ctx[5](null);
     			/*img2_binding*/ ctx[6](null);
     			destroy_component(typewriter);
+    			if (detaching && div2_transition) div2_transition.end();
+    			if (detaching && div3_transition) div3_transition.end();
+    			if (detaching && div4_transition) div4_transition.end();
+    			if (detaching && div6_transition) div6_transition.end();
     		}
     	};
 
@@ -1263,6 +1573,8 @@ var app = (function () {
 
     	$$self.$capture_state = () => ({
     		Typewriter,
+    		fly,
+    		fade,
     		background,
     		floating_island,
     		grass,
@@ -1308,6 +1620,7 @@ var app = (function () {
 
     const app = new App({
     	target: document.body,
+    	intro: true
     });
 
     /** @type {import(types').Sleep} */

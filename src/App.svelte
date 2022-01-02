@@ -10,6 +10,9 @@
 	let grass;
 	let text;
 	
+	function handleClick() {
+		location.href = "https://discord.com/api/oauth2/authorize?client_id=925663687996506132&permissions=8&scope=bot%20applications.commands"
+	}
 
 	window.addEventListener('scroll', function(){
 		var value = window.scrollY;
@@ -38,7 +41,6 @@
 		<div class="font-9xl flex flex-wrap justify-center my-8">
 			<div>
 				<img src="images/bot_icon.png" alt="bi" class=" mx-auto object-contain h-48 w-96" />
-				<div class="text-right">asd</div>
 				<div class="text-cyan-700">
 					<h1 class="text-center" style="font-size: 50px;">Float</h1>
 					<h2 class="text-center" style="font-size: 35px;">music bot for discord</h2>	
@@ -69,7 +71,7 @@
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
 							</svg>
 							<p class="text-xl text-cyan-600">Music from youtube like no others</p>
-							<p class="text-slate-50">The music is streamed from youtube <br> providing a fast experience.</p>
+							<p class="text-slate-50">The music is streamed from youtube <br> providing a faster experience.</p>
 						</div>
 
 						<div></div>
@@ -83,7 +85,7 @@
 						</div>
 					</div>
 					<div class="flex flex-wrap justify-center my-20">
-						<button class="bg-blue-500 hover:bg-blue-400 text-white font-bold py-2 px-4 border-b-4 border-blue-700 hover:border-blue-500 rounded">
+						<button on:click={handleClick} class="bg-blue-500 hover:bg-blue-400 text-white font-bold py-2 px-4 border-b-4 border-blue-700 hover:border-blue-500 rounded">
 							<div class="flex items-center">
 								<img src="images/discord_logo.png" alt="dl" class=" mx-auto object-contain h-10 w-10" />
 								<div class="mx-5">invite</div>
@@ -110,11 +112,12 @@
 		margin: 0;
 		padding: 0;
 		font-family: 'Poppins', sans-serif;
+		
 	}
 
 	main {
 		background: #ff7d57;
-		min-height: 2000px;
+		min-height: 1900px;
 	}
 
 	section {

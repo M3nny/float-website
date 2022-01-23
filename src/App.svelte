@@ -10,8 +10,12 @@
 	let grass;
 	let text;
 	
-	function handleClick() {
+	function handleClickDiscord() {
 		location.href = "https://discord.com/api/oauth2/authorize?client_id=925663687996506132&permissions=8&scope=bot%20applications.commands"
+	}
+
+	function handleClickGithub() {
+		location.href = "https://github.com/M3nny/Float/blob/main/float.py"
 	}
 
 	window.addEventListener('scroll', function(){
@@ -84,14 +88,26 @@
 							<p class="text-slate-50">Write commands faster <br> using the slashed notation.</p>
 						</div>
 					</div>
-					<div class="flex flex-wrap justify-center my-20">
-						<button on:click={handleClick} class="bg-blue-500 hover:bg-blue-400 text-white font-bold py-2 px-4 border-b-4 border-blue-700 hover:border-blue-500 rounded">
-							<div class="flex items-center">
-								<img src="images/discord_logo.png" alt="dl" class=" mx-auto object-contain h-10 w-10" />
-								<div class="mx-5">invite</div>
-							</div>
-						</button>
+
+					<div class="h-56 grid grid-cols-2 gap-1 content-center my-10">
+						<div class="flex flex-wrap justify-center">
+							<button on:click={handleClickDiscord} class="bg-blue-500 hover:bg-blue-400 text-white font-bold py-2 px-4 border-b-4 border-blue-700 hover:border-blue-500 rounded">
+								<div class="flex items-center">
+									<img src="images/discord_logo.png" alt="dl" class=" mx-auto object-contain h-10 w-9" />
+									<div class="mx-5">invite</div>
+								</div>
+							</button>
+						</div>
+						<div class="flex flex-wrap justify-center">
+							<button on:click={handleClickGithub} class="bg-stone-400 hover:bg-stone-300 text-white font-bold py-2 px-4 border-b-4 border-stone-600 hover:border-stone-400 rounded">
+								<div class="flex items-center">
+									<img src="images/github_logo.png" alt="gl" class=" mx-auto object-contain h-10 w-9" />
+									<div class="mx-5">source</div>
+								</div>
+							</button>
+						</div>
 					</div>
+					
 				{/if}
 			</div>
 		</div>

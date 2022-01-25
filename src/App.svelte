@@ -51,7 +51,7 @@
 				</div>
 			
 
-				{#if percent < 50}
+				{#if percent < 40}
 					<div class="h-56 grid grid-cols-3 gap-4 content-center my-10">
 						
 						<div transition:fly="{{x: -500, duration: 1000}}">
